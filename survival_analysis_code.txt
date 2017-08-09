@@ -1,0 +1,198 @@
+﻿proc contents data = ak.telecom_data;
+run;
+
+proc freq data = ak.telecom_data;
+tables total_drop_calls;
+run;
+
+proc means data = ak.telecom_data nmiss;
+run;
+
+data ak1.modeldata;
+ set ak.telecom_data;
+ rev_amt_changed = PLAN_REVENUE_AMT - prev_rev_amt;
+run;
+
+proc standard data = ak1.modeldata mean=0 std=1 out=standard;
+var 
+AVG_CALL_DURATION
+AVG_IVR_DURATION
+CASH_PAYMENTS
+CC_PAYMENTS
+CHECK_PAYMENTS
+COUPON_ADJUSTMENTS
+DISTINCT_FEATURE_COUNT
+NUM_DROPPED_CALLS
+NUM_IVR_CALLS
+NUM_PAYMENTS
+PLAN_REVENUE_AMT
+SUB_ACTIVE_PHONE_COUNT
+SUB_LPAY_AMT
+TTL_FEAT_COUNT
+rev_amt_changed
+hh_income
+prev_rev_amt
+tenure
+total_data
+total_drop_calls
+total_messages
+total_minutes
+;
+run;
+
+data cluster_map;
+ set cluster_map (keep = PSH_SKEY cluster);
+run;
+
+proc sort data = ak1.modeldata nodupkey;
+by PSH_SKEY;
+run;
+
+proc sort data = cluster_map nodupkey;
+by PSH_SKEY;
+run;
+
+data ak1.modeldata;
+merge ak1.modeldata (in=a) cluster_map (in=b);
+by PSH_SKEY;
+if a and b;
+run;
+
+proc freq data = ak1.modeldata;
+tables cluster;
+run;
+
+data ak1.modeldata;
+ set data ak1.modeldata;
+
+/*** Profiling ***/
+
+proc sort data = ak1.modeldata;
+by cluster;
+run;
+
+proc means data = ak1.modeldata mean noprint;
+var AVG_CALL_DURATION
+AVG_IVR_DURATION
+CASH_PAYMENTS
+CC_PAYMENTS
+CHECK_PAYMENTS
+COUPON_ADJUSTMENTS
+DISTINCT_FEATURE_COUNT
+NUM_DROPPED_CALLS
+NUM_IVR_CALLS
+NUM_PAYMENTS
+PLAN_REVENUE_AMT
+SUB_ACTIVE_PHONE_COUNT
+SUB_LPAY_AMT
+TTL_FEAT_COUNT
+rev_amt_changed
+hh_income
+prev_rev_amt
+tenure
+total_data
+total_drop_calls
+total_messages
+total_minutes
+billpay_prob
+custserv_issue
+dup_activ
+netw_complaint
+other_comp
+port_out
+transfer
+af_american
+hispanic
+white
+prod_voice
+sub_active
+sub_disc
+sub_prepay
+
+;
+output out = profiles (drop = _type_ _freq_) mean=;
+run;
+
+/*** Survival Model ***/
+
+/*** Prepping for model ***/
+
+proc freq data = ak1.modeldata;
+tables PRODUCT SUB_STATUS;
+run;
+
+data ak1.modeldata;
+ set ak1.modeldata;
+billpay_prob = 0;
+custserv_issue = 0;
+dup_activ = 0;
+netw_complaint = 0;
+other_comp = 0;
+port_out = 0;
+transfer = 0;
+af_american = 0;
+hispanic = 0;
+white = 0;
+prod_broadband = 0;
+prod_voice = 0;
+sub_30day = 0;
+sub_active = 0;
+sub_disc = 0;
+sub_prepay = 0;
+
+if DISCONNECT_REASON_NAME = 'BILLING/PAYMENT PROBLEM' then billpay_prob = 1;
+if DISCONNECT_REASON_NAME = 'CUSTOMER SVC ISSUE' then custserv_issue = 1;
+if DISCONNECT_REASON_NAME = 'DUPLICATE ACTIVATION' then dup_activ = 1;
+if DISCONNECT_REASON_NAME = 'NETWRK SVC COMPLAINT' then netw_complaint = 1;
+if DISCONNECT_REASON_NAME = 'OTHER COMPETITOR' then other_comp = 1;
+if DISCONNECT_REASON_NAME = 'PORT OUT (# ported to other carrier)' then port_out = 1;
+if DISCONNECT_REASON_NAME = 'TRANSFER' then transfer = 1;
+
+if ETHNICITY = 'African_American' then af_american = 1;
+if ETHNICITY = 'Hispanic' then hispanic = 1;
+if ETHNICITY = 'White' then white = 1;
+
+if PRODUCT = 'Broadband' then prod_broadband = 1;
+if PRODUCT = 'Voice' then prod_voice = 1;
+
+if SUB_STATUS = '30 DAY' then sub_30day = 1;
+if SUB_STATUS = 'ACTIVE' then sub_active = 1;
+if SUB_STATUS = 'DISC' then sub_disc = 1;
+if SUB_STATUS = 'PREPAY' then sub_prepay = 1;
+run;
+
+/*** Models ***/
+
+proc lifereg data = ak1.modeldata;
+model tenure*churned(0) =
+CASH_PAYMENTS
+CC_PAYMENTS
+DISTINCT_FEATURE_COUNT
+
+NUM_DROPPED_CALLS
+NUM_PAYMENTS
+PLAN_REVENUE_AMT
+SUB_LPAY_AMT
+
+bundle
+rev_amt_changed
+hotline
+
+total_data
+total_minutes
+
+billpay_prob
+dup_activ
+other_comp
+transfer
+sub_active
+ 
+/dist = llogistic;
+output out = output_t p=median std = s; 
+where cluster = 3;
+run;
+
+* distribution choices;
+* gamma llogistic lnormal weibull exponential ;
+
+proc means data = output_t; run;
